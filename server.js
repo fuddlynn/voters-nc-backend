@@ -7,9 +7,25 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: true, // Allow all origins
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Database initialization middleware
+app.use(async (req, res, next) => {
+  try {
+    await initializeIfNeeded();
+    next();
+  } catch (error) {
+    console.error('Database initialization error:', error);
+    res.status(500).json({ error: 'Database initialization failed' });
+  }
+});
 
 // Initialize database and import data
 async function initializeApp() {
@@ -159,13 +175,19 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Start server
-app.listen(PORT, async () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 API available at http://localhost:${PORT}/api`);
+// Initialize database on first request
+let isInitialized = false;
+async function initializeIfNeeded() {
+  if (!isInitialized) {
+    console.log('🔧 Initializing database for Vercel...');
+    await initializeApp();
+    isInitialized = true;
+    console.log('✅ Database initialized');
+  }
+}
 
-  // Initialize database
-  await initializeApp();
-});
-
+// For Vercel serverless functions
 module.exports = app;
+
+// Also initialize on module load for Vercel
+initializeIfNeeded().catch(console.error);
