@@ -4,31 +4,14 @@ const path = require('path');
 const { initDatabase, importVoterData, importVotingHistory, updateVoterStats, getAllStreets, getVotersByStreet, getVoterById, getVoterNotes, saveVoterNote, getVoterElectionHistory } = require('./database');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors({
-  origin: true, // Allow all origins
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Database initialization middleware
-app.use(async (req, res, next) => {
-  try {
-    await initializeIfNeeded();
-    next();
-  } catch (error) {
-    console.error('Database initialization error:', error);
-    res.status(500).json({ error: 'Database initialization failed' });
-  }
-});
+// Global database initialization flag
+let isInitialized = false;
 
 // Initialize database and import data
 async function initializeApp() {
+  if (isInitialized) return;
+
   try {
     console.log('🔧 Initializing database...');
     await initDatabase();
@@ -43,13 +26,39 @@ async function initializeApp() {
     await updateVoterStats();
 
     console.log('✅ Database ready!');
+    isInitialized = true;
   } catch (error) {
     console.error('❌ Error initializing database:', error);
-    process.exit(1);
+    // Don't throw in serverless environment
   }
 }
 
+// Middleware
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
+app.use(express.json());
+
+// Database initialization middleware
+app.use(async (req, res, next) => {
+  if (!isInitialized) {
+    await initializeApp();
+  }
+  next();
+});
+
 // API Routes
+
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    initialized: isInitialized
+  });
+});
 
 // Get all streets
 app.get('/api/streets', async (req, res) => {
@@ -125,8 +134,6 @@ app.post('/api/voters/:ncid/notes', async (req, res) => {
 app.delete('/api/voters/:ncid/notes', async (req, res) => {
   try {
     const ncid = req.params.ncid;
-
-    // For deletion, we'll need to use raw SQL since the existing functions don't have a delete function
     const sqlite3 = require('sqlite3').verbose();
     const db = new sqlite3.Database('./voters.db');
 
@@ -165,29 +172,28 @@ app.get('/api/voters/:ncid/elections', async (req, res) => {
   }
 });
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+// Handle OPTIONS requests for CORS
+app.options('*', (req, res) => {
+  res.sendStatus(200);
 });
 
-// Serve the frontend in production
+// Root endpoint
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.json({
+    message: 'Voters NC Backend API',
+    status: 'Running',
+    endpoints: [
+      'GET /api/health',
+      'GET /api/streets',
+      'GET /api/streets/:streetName/voters',
+      'GET /api/voters/:ncid',
+      'GET /api/voters/:ncid/notes',
+      'POST /api/voters/:ncid/notes',
+      'DELETE /api/voters/:ncid/notes',
+      'GET /api/voters/:ncid/elections'
+    ]
+  });
 });
 
-// Initialize database on first request
-let isInitialized = false;
-async function initializeIfNeeded() {
-  if (!isInitialized) {
-    console.log('🔧 Initializing database for Vercel...');
-    await initializeApp();
-    isInitialized = true;
-    console.log('✅ Database initialized');
-  }
-}
-
-// For Vercel serverless functions
+// Export for Vercel
 module.exports = app;
-
-// Also initialize on module load for Vercel
-initializeIfNeeded().catch(console.error);
